@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Reactive Rhythm Game</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+        }
+        #fileInput {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            color: white;
+        }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            z-index: 100;
+            background-color: rgba(0,0,0,0.7);
+            padding: 20px;
+            border-radius: 10px;
+        }
+    </style>
+
+<base target="_self">
+</head>
+<body>
+    <input type="file" id="fileInput" accept="audio/*">
+    <div id="instructions">
+        <h1>Audio Reactive Rhythm Game</h1>
+        <p>Upload an audio file to start playing</p>
+        <p>Hit the circles when they pulse to the beat</p>
+        <p>Press SPACE to pause/resume</p>
+    </div>
+    <script>
+        let audioContext;
+        let audioElement;
+        let analyzer;
+        let fft;
+        let beatDetected = false;
+        let lastBeatTime = 0;
+        let beatInterval = 500;
+        let targets = [];
+        let particles = [];
+        let score = 0;
+        let combo = 0;
+        let maxCombo = 0;
+        let gameState = 'start'; // start, playing, paused
+        let spectrum = [];
+        let bassEnergy = 0;
+        let trebleEnergy = 0;
+        let bgHue = 0;
+        let lastTargetTime = 0;
+        let targetInterval = 800;
+        let hitWindows = {
+            perfect: 50,
+            great: 100,
+            good: 150
+        };
+        let hitCounts = {
+            perfect: 0,
+            great: 0,
+            good: ,
+            miss: 0
+        };
+
+        function setup() {
+            createCanvas(windowWidth, windowHeight);
+            colorMode(HSB, 360, 100, 100, 1);
+            noStroke();
+            textAlign(CENTER, CENTER);
+            
+            // Initialize audio context
+            audioContext = getAudioContext();
+            userStartAudio();
+            
+            // Setup file input
+            document.getElementById('fileInput').addEventListener('change', handleFile);
+            
+            // Setup FFT for beat detection
+            fft = new p5.FFT(0.8, 64);
+            analyzer = new p5.Amplitude();
+        }
+
+        function draw() {
+            if (gameState === 'paused') {
+                background(0, 0, 10);
+                fill(255);
+                textSize(32);
+                text("PAUSED", width/2, height/2);
+                return;
+            }
+            
+            // Update audio analysis
+            if (audioElement && audioElement.isPlaying()) {
+                spectrum = fft.analyze();
+                analyzer.update();
+                
+                // Beat detection
+                detectBeat();
+                
+                // Calculate energy levels
+                bassEnergy = fft.getEnergy("bass");
+                trebleEnergy = fft.getEnergy("treble");
+                
+                // Background color reacts to bass
+                bgHue = (bgHue + bassEnergy * 0.001) % 360;
+                background(bgHue, 50, 10);
+                
+                // Draw spectrum visualization
+                drawSpectrum();
+                
+                // Spawn targets based on beat
+                if (millis() - lastTargetTime > targetInterval && beatDetected) {
+                    spawnTarget();
+                    lastTargetTime = millis();
+                    targetInterval = random(400, 1200);
+                }
+            } else {
+                background(0);
+            }
+            
+            // Update and draw targets
+            updateTargets();
+            
+            // Update and draw particles
+            updateParticles();
+            
+            // Draw UI
+            drawUI();
+            
+            // Reset beat flag
+            beatDetected = false;
+        }
+
+        function detectBeat() {
+            let level = analyzer.getLevel();
+            let time = millis();
+            
+            // Simple beat detection
+            if (level > 0.3 && time - lastBeatTime > beatInterval) {
+                beatDetected = true;
+                lastBeatTime = time;
+                beatInterval = random(300, 800);
+            }
+        }
+
+        function spawnTarget() {
+            let size = random(50, 100);
+            let x = random(size, width - size);
+            let y = random(size, height - size);
+            let hue = random(360);
+            let pulseSpeed = random(0.02, 0.05);
+            let pulseSize = random(0.2, 0.4);
+            
+            targets.push({
+                x: x,
+                y: y,
+                size: size,
+                baseSize: size,
+                hue: hue,
+                pulseSpeed: pulseSpeed,
+                pulseSize: pulseSize,
+                pulsePhase: random(TWO_PI),
+                hit: false,
+                hitTime: 0,
+                hitType: null
+            });
+        }
+
+        function updateTargets() {
+            for (let i = targets.length - 1; i >= 0; i--) {
+                let target = targets[i];
+                
+                // Update pulsing animation
+                target.pulsePhase += target.pulseSpeed;
+                let pulseAmount = sin(target.pulsePhase) * target.pulseSize;
+                target.size = target.baseSize * (1 + pulseAmount);
+                
+                // Draw target
+                if (!target.hit) {
+                    fill(target.hue, 80, 80, 0.8);
+                    ellipse(target.x, target.y, target.size);
+                    
+                    // Inner circle
+                    fill(target.hue, 80, 100, 0.6);
+                    ellipse(target.x, target.y, target.size * 0.7);
+                } else {
+                    // Draw hit effect
+                    let fade = 1 - (millis() - target.hitTime) / 500;
+                    if (fade > 0) {
+                        fill(target.hue, 80, 100, fade * 0.8);
+                        ellipse(target.x, target.y, target.size * (1 + (1 - fade) * 2));
+                        
+                        // Hit type indicator
+                        fill(255);
+                        textSize(24);
+                        text(target.hitType.toUpperCase(), target.x, target.y);
+                    } else {
+                        targets.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    fill(p.hue, p.saturation, p.brightness, p.life / p.maxLife);
+                    ellipse(p.x, p.y, p.size);
+                }
+            }
+        }
+
+        function drawSpectrum() {
+            let w = width / spectrum.length;
+            for (let i = 0; i < spectrum.length; i++) {
+                let h = map(spectrum[i], 0, 255, 0, height/4);
+                fill((bgHue + i * 2) % 360, 80, 80);
+                rect(i * w, height - h, w, h);
+            }
+        }
+
+        function drawUI() {
+            // Score display
+            fill(255);
+            textSize(24);
+            text(`Score: ${score}`, 100, 30);
+            text(`Combo: ${combo}x`, 100, 60);
+            text(`Max Combo: ${maxCombo}x`, 100, 90);
+            
+            // Hit counts
+            textSize(16);
+            text(`Perfect: ${hitCounts.perfect}`, width - 100, 30);
+            text(`Great: ${hitCounts.great}`, width - 100, 50);
+            text(`Good: ${hitCounts.good}`, width - 100, 70);
+            text(`Miss: ${hitCounts.miss}`, width - 100, 90);
+        }
+
+        function mousePressed() {
+            if (gameState !== 'playing') return;
+            
+            let hitAny = false;
+            
+            for (let i = targets.length - 1; i >= 0; i--) {
+                let target = targets[i];
+                if (target.hit) continue;
+                
+                let d = dist(mouseX, mouseY, target.x, target.y);
+                let hitRadius = target.size / 2;
+                let pulseAmount = sin(target.pulsePhase) * target.pulseSize;
+                let currentSize = target.baseSize * (1 + pulseAmount);
+                
+                if (d < currentSize / 2) {
+                    // Calculate timing accuracy
+                    let timeDiff = abs(sin(target.pulsePhase) * 1000; // Rough approximation of beat timing
+                    let hitType;
+                    
+                    if (timeDiff < hitWindows.perfect) {
+                        hitType = 'perfect';
+                        score += 300 * (1 + combo * 0.1);
+                    } else if (timeDiff < hitWindows.great) {
+                        hitType = 'great';
+                        score += 200 * (1 + combo * 0.05);
+                    } else if (timeDiff < hitWindows.good) {
+                        hitType = 'good';
+                        score += 100;
+                    }
+                    
+                    hitCounts[hitType]++;
+                    combo++;
+                    maxCombo = max(maxCombo, combo);
+                    
+                    target.hit = true;
+                    target.hitTime = millis();
+                    target.hitType = hitType;
+                    hitAny = true;
+                    
+                    // Create particles
+                    createParticles(target.x, target.y, target.hue, combo);
+                    
+                    break;
+                }
+            }
+            
+            if (!hitAny) {
+                combo = 0;
+                hitCounts.miss++;
+            }
+        }
+
+        function createParticles(x, y, hue, countMultiplier) {
+            let particleCount = 20 + combo * 2;
+            
+            for (let i = 0; i < particleCount; i++) {
+                let angle = random(TWO_PI);
+                let speed = random(1, 3 + combo * 0.1);
+                let life = random(30, 90);
+                
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: cos(angle) * speed,
+                    vy: sin(angle) * speed,
+                    size: random(5, 15),
+                    hue: (hue + random(-30, 30)) % 360,
+                    saturation: 80,
+                    brightness: 100,
+                    life: life,
+                    maxLife: life
+                });
+            }
+        }
+
+        function handleFile(e) {
+            let file = e.target.files[0];
+            if (file) {
+                if (audioElement) {
+                    audioElement.stop();
+                }
+                
+                audioElement = loadSound(file, () => {
+                    audioElement.play();
+                    gameState = 'playing';
+                    document.getElementById('instructions').style.display = 'none';
+                });
+            }
+        }
+
+        function keyPressed() {
+            if (key === ' ' && gameState !== 'start') {
+                if (gameState === 'playing') {
+                    gameState = 'paused';
+                    if (audioElement) audioElement.pause();
+                } else if (gameState === 'paused') {
+                    gameState = 'playing';
+                    if (audioElement) audioElement.play();
+                }
+            }
+        }
+
+        function windowResized() {
+            resizeCanvas(windowWidth, windowHeight);
+        }
+    </script>
+</body>
+</html>
